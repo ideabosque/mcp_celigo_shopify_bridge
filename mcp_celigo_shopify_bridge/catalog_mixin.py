@@ -20,6 +20,7 @@ import humps
 
 from .celigo_backed_processor import CeligoBackedProcessor
 from .error_handler import (
+    CeligoError,
     handle_errors,
     is_empty_result,
     propagate_error_if_present,
@@ -135,7 +136,15 @@ class CatalogMixin(CeligoBackedProcessor):
         }
 
         tool_name = "get_product"
-        result = self._execute_celigo_call(tool_name, tool_arguments)
+        try:
+            result = self._execute_celigo_call(tool_name, tool_arguments)
+        except CeligoError as exc:
+            # A missing product arrives as a UCP ``product_not_found``
+            # rejection; normalize it into the friendly empty-result message
+            # instead of an error envelope.
+            if exc.details.get("code") == "product_not_found":
+                return f"No product found for id '{product_id}'."
+            raise
         if error := propagate_error_if_present(result):
             return error
 

@@ -254,6 +254,17 @@ class TestGetProduct:
         assert "error" in result
         assert result["error_code"] == ErrorCode.UNKNOWN_ERROR
 
+    def test_product_not_found_returns_friendly_message(self, processor):
+        from mcp_celigo_shopify_bridge.celigo_client import CeligoError
+
+        processor._execute_celigo_call.side_effect = CeligoError(
+            message="product_not_found: Product not found",
+            error_code=ErrorCode.CELIGO_API_ERROR,
+            details={"code": "product_not_found", "severity": "unrecoverable", "source": "ucp_messages"},
+        )
+        result = processor.get_product(id="gid://shopify/Product/1")
+        assert result == "No product found for id 'gid://shopify/Product/1'."
+
 
 # ==================== lookup_catalog ====================
 
@@ -552,6 +563,43 @@ class TestCeligoClientResponseHandling:
         )
         with pytest.raises(CeligoError):
             client._handle_response(response)
+
+    def test_ucp_envelope_is_error_condenses_messages(self):
+        client = self._client()
+        ucp_error = json.dumps(
+            {
+                "ucp": {"version": "2026-08-25", "status": "error"},
+                "messages": [
+                    {
+                        "type": "error",
+                        "content_type": "plain",
+                        "code": "product_not_found",
+                        "content": "Product not found",
+                        "severity": "unrecoverable",
+                    }
+                ],
+            }
+        )
+        response = self._response(
+            {
+                "text": [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "content": [{"type": "text", "text": ucp_error}],
+                            "isError": True,
+                        },
+                    }
+                ]
+            }
+        )
+        with pytest.raises(CeligoError) as excinfo:
+            client._handle_response(response)
+        assert excinfo.value.message == "product_not_found: Product not found"
+        assert excinfo.value.details.get("code") == "product_not_found"
+        assert excinfo.value.details.get("severity") == "unrecoverable"
+        assert excinfo.value.details.get("source") == "ucp_messages"
 
     def test_ucp_envelope_errors_array_raises_with_details(self):
         client = self._client()

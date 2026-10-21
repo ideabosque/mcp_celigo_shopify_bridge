@@ -310,11 +310,16 @@ class CeligoClient:
             if text is None:
                 continue
             if result.get("isError"):
-                # Backend rejection surfaced as an error content block
-                # (e.g. "Missing required arguments: id").
+                # Backend rejection surfaced as an error content block.
+                # Condense UCP envelope text into a short message (a real
+                # rejection is e.g. an envelope whose messages[] carries
+                # {"type": "error", "code": "product_not_found", "content":
+                # "Product not found"}).
+                message, details = self._condense_error_text(text)
                 raise CeligoError(
-                    message=text,
+                    message=message,
                     error_code=ErrorCode.CELIGO_API_ERROR,
+                    details=details,
                 )
             parsed = self._parse_result_string(text)
             if parsed is None:
@@ -332,6 +337,41 @@ class CeligoClient:
                 error_code=ErrorCode.JSONRPC_REQUEST_FAILED,
             )
         return payload
+
+    def _condense_error_text(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        """Condense an ``isError``-flagged tool result into a short message.
+
+        Shopify/Celigo UCP rejections arrive as full envelope text whose
+        structured errors live in ``messages[]`` entries shaped like
+        ``{"type": "error", "code": "product_not_found", "content": "Product
+        not found", "severity": "unrecoverable"}``. Extract those into a
+        short ``"code: content"`` message with ``code``/``severity`` in
+        ``details``; fall back to a truncated copy of the raw text when no
+        structured error is present.
+        """
+        details: Dict[str, Any] = {}
+        parsed = self._parse_result_string(text)
+        if isinstance(parsed, dict):
+            messages = parsed.get("messages")
+            if isinstance(messages, list):
+                short: list = []
+                for entry in messages:
+                    if isinstance(entry, dict) and entry.get("type") == "error":
+                        code = entry.get("code")
+                        content = entry.get("content") or entry.get("message")
+                        short.append(
+                            f"{code}: {content}"
+                            if code and content
+                            else (content if content else code)
+                        )
+                        if code:
+                            details.setdefault("code", code)
+                        if entry.get("severity"):
+                            details.setdefault("severity", entry.get("severity"))
+                if short:
+                    details.setdefault("source", "ucp_messages")
+                    return "; ".join(str(item) for item in short if item), details
+        return text[:300], details
 
     @staticmethod
     def _first_content_text(result: dict) -> Optional[str]:
