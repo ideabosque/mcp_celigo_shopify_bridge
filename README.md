@@ -14,13 +14,17 @@ has three routes with different tool surfaces:
 - **Order lookup route** (`https://api.integrator.io/apis/v1/api/orders`,
   REST) — plain REST `POST` used by `lookup_order`, not a JSON-RPC MCP
   proxy; consumes the lookup criteria as its JSON request body.
+- **Order return route** (`https://api.integrator.io/apis/v1/api/return`,
+  REST) — plain REST `POST` used by `create_return`; sends
+  `{orderId, quantity, fulfillmentLineItemId}` as the JSON request body
+  (all three required) and carries no automatic retry (mutation).
 
 The package provides a processor facade and MCP configuration for a host
 runtime. It is not a standalone MCP server executable.
 
 ## Capabilities
 
-The module registers 6 tools:
+The module registers 7 tools:
 
 - `search_catalog` — product catalog search following the Shopify UCP
   convention. Pass a natural language `query` (e.g. "snowboard") with
@@ -53,6 +57,7 @@ The module registers 6 tools:
   paging; forwarded fields are kept for forward compatibility with filter
   support. Configurable via
   `celigo_mcp.orders_endpoint`.
+- `create_return` — order return creation via the Celigo integrator.io REST API (`POST https://api.integrator.io/apis/v1/api/return`, same Celigo bearer token). Sends `{orderId, quantity, fulfillmentLineItemId}` built from the required `order_id`, `quantity`, and `fulfillment_line_item_id` arguments; unknown fields pass through verbatim. Empty responses become a friendly confirmation string. It is a mutation, so the tool carries no automatic retry. Configurable via `celigo_mcp.returns_endpoint`.
 - `call_celigo_tool` — escape hatch to invoke any other Celigo
   integrator.io MCP tool by name (e.g. cart, checkout, and order operations
   such as `create_cart`, `get_cart`, `create_checkout`, `get_order` — these
@@ -84,6 +89,7 @@ host owns buyer authentication.
       -> UCP route    https://api.integrator.io/apis/v1/api/ucp/mcp   (catalog tools)
       -> legacy route https://api.integrator.io/apis/v1/api/mcp       (legacy_tools)
       -> orders route  https://api.integrator.io/apis/v1/api/orders  (lookup_order, REST)
+      -> returns route https://api.integrator.io/apis/v1/api/return  (create_return, REST)
 
 The client owns endpoint routing (tools listed in
 `celigo_mcp.legacy_tools` go to the legacy endpoint, everything else to the
@@ -125,6 +131,7 @@ settings = {
         "legacy_endpoint": "https://api.integrator.io/apis/v1/api/mcp",
         "legacy_tools": ["search_shop_policies_and_faqs"],
         "orders_endpoint": "https://api.integrator.io/apis/v1/api/orders",
+        "returns_endpoint": "https://api.integrator.io/apis/v1/api/return",
         "bearer_token": "replace-me",
     }
 }
@@ -136,6 +143,7 @@ processor.part_id = "partition-id"
 
 Optional settings: `ucp_agent_profile` (override the injected UCP agent
 profile URL), `orders_endpoint` (override the order lookup REST URL),
+`returns_endpoint` (override the order return REST URL),
 `timeout`, `connect_timeout`, `max_retries`.
 
 Set `bearer_token` to a Celigo integrator.io API token. Requests send

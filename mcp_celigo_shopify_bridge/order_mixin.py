@@ -18,9 +18,12 @@ import humps
 
 from .celigo_backed_processor import CeligoBackedProcessor
 from .error_handler import (
+    ErrorCode,
     handle_errors,
     is_empty_result,
     propagate_error_if_present,
+    validate_not_empty,
+    ValidationError,
 )
 
 
@@ -57,5 +60,69 @@ class OrderMixin(CeligoBackedProcessor):
 
         if is_empty_result(data):
             return "No orders found for the provided lookup criteria."
+
+        return data
+
+    # snake_case MCP argument -> camelCase REST body field
+    _RETURN_FIELD_MAP = {
+        "order_id": "orderId",
+        "quantity": "quantity",
+        "fulfillment_line_item_id": "fulfillmentLineItemId",
+    }
+
+    @handle_errors(operation_name="create_return")
+    def create_return(self, **arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Create an order return via the Celigo integrator.io REST endpoint.
+
+        POSTs ``https://api.integrator.io/apis/v1/api/return`` with the
+        Celigo bearer token and a JSON body built from the MCP arguments::
+
+            {"orderId": "gid://shopify/Order/...", "quantity": 10,
+             "fulfillmentLineItemId": "gid://shopify/FulfillmentLineItem/..."}
+
+        snake_case arguments are mapped to the API's camelCase fields
+        (``order_id`` -> ``orderId``, ``fulfillment_line_item_id`` ->
+        ``fulfillmentLineItemId``); unknown fields are forwarded verbatim
+        (they are expected to already be camelCase). ``order_id`` and
+        ``fulfillment_line_item_id`` are required; ``quantity`` must be a
+        positive integer. This is a mutation — no automatic retries, so
+        callers should retry deliberately.
+        """
+        body: Dict[str, Any] = {}
+        for key, value in arguments.items():
+            if value is None or value == "":
+                continue
+            body[self._RETURN_FIELD_MAP.get(key, key)] = value
+
+        for field in ("orderId", "fulfillmentLineItemId"):
+            validate_not_empty(body.get(field), field)
+
+        try:
+            quantity = int(body.get("quantity"))
+        except (TypeError, ValueError):
+            quantity = None
+        if quantity is None or quantity <= 0:
+            raise ValidationError(
+                message="quantity must be a positive integer",
+                error_code=ErrorCode.VALIDATION_FAILED,
+                details={"field": "quantity"},
+            )
+        body["quantity"] = quantity
+
+        result = self._execute_return_creation(body)
+        if error := propagate_error_if_present(result):
+            return error
+
+        data = humps.decamelize(result) if isinstance(result, (dict, list)) else result
+
+        if is_empty_result(data):
+            return (
+                "Return request submitted for order %s (%s x%s)."
+                % (
+                    body.get("orderId"),
+                    body.get("fulfillmentLineItemId"),
+                    body.get("quantity"),
+                )
+            )
 
         return data

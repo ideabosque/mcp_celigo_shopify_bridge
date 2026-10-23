@@ -54,3 +54,10 @@ class CeligoBackedProcessor:
     ) -> Any:
         """Delegate an order lookup POST to the CeligoClient REST route."""
         return self.celigo_client.lookup_orders(payload)
+
+    def _execute_return_creation(
+        self,
+        payload: Dict[str, Any],
+    ) -> Any:
+        """Delegate a return-creation POST to the CeligoClient REST route."""
+        return self.celigo_client.create_return(payload)

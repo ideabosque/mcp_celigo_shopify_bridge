@@ -156,6 +156,29 @@ MCP_CONFIGURATION = {
                 "required": [],
             },
         },
+        # Return Creation (1)
+        {
+            "name": "create_return",
+            "description": "Create an order return via the Celigo integrator.io REST API (POST https://api.integrator.io/apis/v1/api/return). Sends {orderId, quantity, fulfillmentLineItemId} derived from order_id, quantity, and fulfillment_line_item_id arguments; extra fields pass through verbatim. Uses the configured Celigo bearer token for authentication. This is a mutation with no automatic retry.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "order_id": {
+                        "type": "string",
+                        "description": "Order to create the return against, e.g. 'gid://shopify/Order/18955528700093'",
+                    },
+                    "quantity": {
+                        "type": "integer",
+                        "description": "Positive integer quantity of units to return from that fulfillment line item, e.g. 10",
+                    },
+                    "fulfillment_line_item_id": {
+                        "type": "string",
+                        "description": "Fulfillment line item being returned, e.g. 'gid://shopify/FulfillmentLineItem/18633899081917'",
+                    },
+                },
+                "required": ["order_id", "quantity", "fulfillment_line_item_id"],
+            },
+        },
         # Generic Celigo Tool Invocation (escape hatch)
         {
             "name": "call_celigo_tool",
@@ -220,6 +243,15 @@ MCP_CONFIGURATION = {
             "function_name": "lookup_order",
             "return_type": "text",
         },
+        # Return Creation
+        {
+            "type": "tool",
+            "name": "create_return",
+            "module_name": "mcp_celigo_shopify_bridge",
+            "class_name": "MCPCeligoBridge",
+            "function_name": "create_return",
+            "return_type": "text",
+        },
         # Generic Celigo Tool Invocation (escape hatch)
         {
             "type": "tool",
@@ -248,6 +280,7 @@ MCP_CONFIGURATION = {
                     "legacy_endpoint": "https://api.integrator.io/apis/v1/api/mcp",
                     "legacy_tools": ["search_shop_policies_and_faqs"],
                     "orders_endpoint": "https://api.integrator.io/apis/v1/api/orders",
+                    "returns_endpoint": "https://api.integrator.io/apis/v1/api/return",
                     "bearer_token": "89f3690302b34641999a7f40d984f76a",
                     "timeout": 60,
                     "connect_timeout": 15,

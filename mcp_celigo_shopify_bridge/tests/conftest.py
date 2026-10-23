@@ -50,6 +50,7 @@ def processor():
     proc.part_id = "test-part-id"
     proc._execute_celigo_call = MagicMock()
     proc._execute_order_lookup = MagicMock()
+    proc._execute_return_creation = MagicMock()
     return proc
 
 

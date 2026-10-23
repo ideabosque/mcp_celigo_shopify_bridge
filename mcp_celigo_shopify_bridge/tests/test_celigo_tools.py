@@ -27,11 +27,11 @@ from mcp_celigo_shopify_bridge.error_handler import (
 
 class TestToolRegistration:
     def test_configuration_has_tools(self):
-        assert len(MCP_CONFIGURATION["tools"]) == 6
+        assert len(MCP_CONFIGURATION["tools"]) == 7
 
     def test_configuration_has_module_links(self):
         links = MCP_CONFIGURATION["module_links"]
-        assert len(links) == 6
+        assert len(links) == 7
         by_name = {link["name"]: link for link in links}
         for name in (
             "search_catalog",
@@ -39,6 +39,7 @@ class TestToolRegistration:
             "lookup_catalog",
             "search_shop_policies_and_faqs",
             "lookup_order",
+            "create_return",
             "call_celigo_tool",
         ):
             link = by_name[name]
@@ -450,6 +451,117 @@ class TestLookupOrder:
     def test_exception_returns_error_dict(self, processor):
         processor._execute_order_lookup.side_effect = RuntimeError("boom")
         result = processor.lookup_order(order_id="1")
+        assert "error" in result
+        assert result["error_code"] == ErrorCode.UNKNOWN_ERROR
+
+
+# ==================== create_return ====================
+
+
+class TestCreateReturn:
+    """OrderReturnMixin.create_return — argument mapping + validation."""
+
+    ORDER_GID = "gid://shopify/Order/18955528700093"
+    FLI_GID = "gid://shopify/FulfillmentLineItem/18633899081917"
+
+    def _call(self, processor, result=None, **kwargs):
+        processor._execute_return_creation.return_value = result
+        return processor.create_return(
+            order_id=self.ORDER_GID,
+            quantity=10,
+            fulfillment_line_item_id=self.FLI_GID,
+            **kwargs,
+        )
+
+    def test_snake_case_args_map_to_camel_case_body(
+        self, processor, celigo_result_factory
+    ):
+        result = self._call(
+            processor,
+            celigo_result_factory(
+                {"return": {"id": "gid://shopify/Return/1", "status": "OPEN"}}
+            ),
+        )
+        processor._execute_return_creation.assert_called_once_with(
+            {
+                "orderId": self.ORDER_GID,
+                "quantity": 10,
+                "fulfillmentLineItemId": self.FLI_GID,
+            }
+        )
+        assert result["return"]["status"] == "OPEN"
+
+    def test_quantity_string_is_coerced_to_int(self, processor):
+        processor._execute_return_creation.return_value = {}
+        processor.create_return(
+            order_id=self.ORDER_GID,
+            quantity="10",
+            fulfillment_line_item_id=self.FLI_GID,
+        )
+        assert processor._execute_return_creation.call_args[0][0][
+            "quantity"
+        ] == 10
+
+    def test_unknown_fields_forwarded_verbatim(self, processor):
+        self._call(processor, {}, return_reason="customer changed mind")
+        body = processor._execute_return_creation.call_args[0][0]
+        assert body["return_reason"] == "customer changed mind"
+
+    def test_requires_order_id(self, processor, celigo_result_factory):
+        processor._execute_return_creation.return_value = celigo_result_factory({})
+        result = processor.create_return(
+            quantity=10, fulfillment_line_item_id=self.FLI_GID
+        )
+        assert result["error_code"] == ErrorCode.VALIDATION_FAILED
+        assert result["details"]["field"] == "orderId"
+
+    def test_requires_fulfillment_line_item_id(
+        self, processor, celigo_result_factory
+    ):
+        processor._execute_return_creation.return_value = celigo_result_factory({})
+        result = processor.create_return(
+            order_id=self.ORDER_GID, quantity=10
+        )
+        assert result["error_code"] == ErrorCode.VALIDATION_FAILED
+        assert result["details"]["field"] == "fulfillmentLineItemId"
+
+    def test_rejects_non_positive_quantity(self, processor):
+        result = processor.create_return(
+            order_id=self.ORDER_GID,
+            quantity=0,
+            fulfillment_line_item_id=self.FLI_GID,
+        )
+        assert result["error_code"] == ErrorCode.VALIDATION_FAILED
+        assert result["details"]["field"] == "quantity"
+
+        result = processor.create_return(
+            order_id=self.ORDER_GID,
+            quantity="two",
+            fulfillment_line_item_id=self.FLI_GID,
+        )
+        assert result["error_code"] == ErrorCode.VALIDATION_FAILED
+
+    def test_empty_result_returns_confirmation(
+        self, processor, celigo_result_factory
+    ):
+        result = self._call(processor, celigo_result_factory([]))
+        assert result.startswith("Return request submitted for order ")
+
+    def test_propagates_client_error(self, processor):
+        processor._execute_return_creation.return_value = build_error_response(
+            message="Celigo API returned HTTP 400: bad fulfillment line item",
+            error_code=ErrorCode.CELIGO_API_ERROR,
+        )
+        result = processor.create_return(
+            order_id=self.ORDER_GID,
+            quantity=10,
+            fulfillment_line_item_id=self.FLI_GID,
+        )
+        assert result["error_code"] == ErrorCode.CELIGO_API_ERROR
+
+    def test_exception_returns_error_dict(self, processor):
+        processor._execute_return_creation.side_effect = RuntimeError("boom")
+        result = self._call(processor)
         assert "error" in result
         assert result["error_code"] == ErrorCode.UNKNOWN_ERROR
 
@@ -925,6 +1037,80 @@ class TestCeligoClientRouting:
         with pytest.raises(CeligoError) as excinfo:
             client.lookup_orders({"id": "1"})
         assert excinfo.value.error_code == ErrorCode.API_CONNECTION_FAILED
+
+    def test_return_posts_to_returns_endpoint(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 1,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.content = b'{"return": {"id": "gid://shopify/Return/1"}}'
+        response.json.return_value = {
+            "return": {"id": "gid://shopify/Return/1"}
+        }
+        client._http_client.post.return_value = response
+
+        body = {
+            "orderId": "gid://shopify/Order/1",
+            "quantity": 10,
+            "fulfillmentLineItemId": "gid://shopify/FulfillmentLineItem/2",
+        }
+        data = client.create_return(body)
+
+        client._http_client.post.assert_called_once_with(
+            "https://api.integrator.io/apis/v1/api/return",
+            json=body,
+            headers={
+                "Authorization": "Bearer tok",
+                "Content-Type": "application/json",
+            },
+        )
+        assert data == {"return": {"id": "gid://shopify/Return/1"}}
+
+    def test_return_requires_payload(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 0,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+
+        with pytest.raises(CeligoError) as excinfo:
+            client.create_return({})
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_FAILED
+        client._http_client.post.assert_not_called()
+
+    def test_return_mutation_never_retries(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 3,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+        client._http_client.post.side_effect = RuntimeError("boom")
+
+        with pytest.raises(CeligoError) as excinfo:
+            client.create_return(
+                {"orderId": "gid://shopify/Order/1", "quantity": 1}
+            )
+        assert excinfo.value.error_code == ErrorCode.API_CONNECTION_FAILED
+        # A retried POST could create a duplicate return — exactly once only.
+        client._http_client.post.assert_called_once()
 
 
 # ==================== Validation utilities ====================

@@ -57,6 +57,10 @@ class CeligoClient:
     # Plain REST order lookup route (not JSON-RPC): POST the lookup criteria
     # as the JSON body, same Celigo Bearer auth as the MCP proxy routes.
     _DEFAULT_ORDERS_ENDPOINT = "https://api.integrator.io/apis/v1/api/orders"
+    # Plain REST order-return route (not JSON-RPC): POST the return request
+    # (orderId / quantity / fulfillmentLineItemId) as the JSON body, same
+    # Celigo Bearer auth as the MCP proxy routes.
+    _DEFAULT_RETURNS_ENDPOINT = "https://api.integrator.io/apis/v1/api/return"
     _DEFAULT_UCP_PROFILE = (
         "https://shopify.dev/ucp/agent-profiles/examples/"
         "2026-08-25/valid-with-capabilities.json"
@@ -82,6 +86,9 @@ class CeligoClient:
         )
         self._orders_endpoint = (
             module_setting.get("orders_endpoint") or self._DEFAULT_ORDERS_ENDPOINT
+        )
+        self._returns_endpoint = (
+            module_setting.get("returns_endpoint") or self._DEFAULT_RETURNS_ENDPOINT
         )
         legacy_tools = module_setting.get("legacy_tools", self._DEFAULT_LEGACY_TOOLS)
         self._legacy_tools = (
@@ -260,6 +267,61 @@ class CeligoClient:
             return []
 
         return self._normalize(body)
+
+    # ==================== REST Return Creation ====================
+
+    def create_return(self, payload: Dict[str, Any]) -> Any:
+        """POST an order return to the integrator.io returns REST route.
+
+        Plain REST, same shape as the reference call::
+
+            curl -X POST "https://api.integrator.io/apis/v1/api/return" \\
+                -H "Authorization: Bearer <celigo token>" \\
+                -H "Content-Type: application/json" \\
+                -d '{"orderId": "...", "quantity": 10,
+                     "fulfillmentLineItemId": "..."}'
+
+        ``payload`` is sent verbatim as the JSON request body and is
+        REQUIRED (a return without orderId / fulfillmentLineItemId /
+        quantity is meaningless). Unlike :meth:`lookup_orders` this is a
+        MUTATION, so no automatic retries: a retried POST could create a
+        duplicate return when the first attempt actually landed. Raises
+        :class:`CeligoError`; the calling mixin normalizes that into the
+        standardized error response.
+        """
+        if not payload:
+            raise CeligoError(
+                message="A return request body is required (orderId, "
+                "quantity, fulfillmentLineItemId).",
+                error_code=ErrorCode.VALIDATION_FAILED,
+            )
+
+        headers = {
+            "Authorization": (
+                f"Bearer {self._bearer_token}" if self._bearer_token else None
+            ),
+            "Content-Type": "application/json",
+        }
+        headers = {k: v for k, v in headers.items() if v is not None}
+
+        try:
+            response = self._http_client.post(
+                self._returns_endpoint,
+                json=payload,
+                headers=headers,
+            )
+            return self._handle_rest_response(response)
+        except CeligoError:
+            raise
+        except Exception as exception:
+            self.logger.error(
+                f"Failed return creation via {self._returns_endpoint}: "
+                f"{exception}\n{traceback.format_exc()}"
+            )
+            raise CeligoError(
+                message=str(exception),
+                error_code=ErrorCode.API_CONNECTION_FAILED,
+            )
 
     def _with_ucp_meta(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure ``arguments.meta.ucp-agent.profile`` is present.
