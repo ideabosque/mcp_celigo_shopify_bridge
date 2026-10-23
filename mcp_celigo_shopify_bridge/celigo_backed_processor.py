@@ -47,3 +47,10 @@ class CeligoBackedProcessor:
         arguments: Dict[str, Any],
     ) -> Any:
         return self.celigo_client.call_tool(tool_name, arguments)
+
+    def _execute_order_lookup(
+        self,
+        payload: Dict[str, Any] | None = None,
+    ) -> Any:
+        """Delegate an order lookup POST to the CeligoClient REST route."""
+        return self.celigo_client.lookup_orders(payload)

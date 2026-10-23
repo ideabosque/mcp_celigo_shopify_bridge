@@ -16,6 +16,7 @@ from typing import Any, Dict
 
 from .celigo_backed_processor import CeligoBackedProcessor
 from .catalog_mixin import CatalogMixin
+from .order_mixin import OrderMixin
 from .policy_mixin import PolicyMixin
 from .tool_mixin import ToolMixin
 
@@ -23,6 +24,7 @@ from .tool_mixin import ToolMixin
 class MCPCeligoBridge(
     CatalogMixin,
     PolicyMixin,
+    OrderMixin,
     ToolMixin,
 ):
     """Public interface aggregating all Celigo integrator.io MCP tools.

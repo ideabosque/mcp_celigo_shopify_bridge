@@ -54,6 +54,9 @@ class CeligoClient:
 
     _DEFAULT_ENDPOINT = "https://api.integrator.io/apis/v1/api/ucp/mcp"
     _DEFAULT_LEGACY_ENDPOINT = "https://api.integrator.io/apis/v1/api/mcp"
+    # Plain REST order lookup route (not JSON-RPC): POST the lookup criteria
+    # as the JSON body, same Celigo Bearer auth as the MCP proxy routes.
+    _DEFAULT_ORDERS_ENDPOINT = "https://api.integrator.io/apis/v1/api/orders"
     _DEFAULT_UCP_PROFILE = (
         "https://shopify.dev/ucp/agent-profiles/examples/"
         "2026-08-25/valid-with-capabilities.json"
@@ -76,6 +79,9 @@ class CeligoClient:
         self._bearer_token = module_setting.get("bearer_token")
         self._legacy_endpoint = (
             module_setting.get("legacy_endpoint") or self._DEFAULT_LEGACY_ENDPOINT
+        )
+        self._orders_endpoint = (
+            module_setting.get("orders_endpoint") or self._DEFAULT_ORDERS_ENDPOINT
         )
         legacy_tools = module_setting.get("legacy_tools", self._DEFAULT_LEGACY_TOOLS)
         self._legacy_tools = (
@@ -170,6 +176,90 @@ class CeligoClient:
             message=str(last_error),
             error_code=ErrorCode.API_CONNECTION_FAILED,
         )
+
+    # ==================== REST Order Lookup ====================
+
+    def lookup_orders(self, payload: Optional[Dict[str, Any]] = None) -> Any:
+        """POST the integrator.io order lookup REST route.
+
+        Unlike :meth:`call_tool` this is NOT a JSON-RPC ``tools/call`` —
+        the orders route is a plain REST endpoint::
+
+            curl -X POST "https://api.integrator.io/apis/v1/api/orders" \\
+                -H "Authorization: Bearer <celigo token>"
+
+        ``payload`` (optional lookup criteria, e.g. filter fields the target
+        lookup integration expects) is sent verbatim as the JSON request
+        body; no body is sent when it is empty, mirroring the reference curl.
+        Transient connection failures retry per ``celigo_mcp.max_retries``.
+        Raises :class:`CeligoError` on failure; the calling mixin normalizes
+        that into the standardized error response.
+        """
+        headers = {
+            "Authorization": (
+                f"Bearer {self._bearer_token}" if self._bearer_token else None
+            ),
+            "Content-Type": "application/json",
+        }
+        headers = {k: v for k, v in headers.items() if v is not None}
+
+        last_error = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._http_client.post(
+                    self._orders_endpoint,
+                    json=payload if payload else None,
+                    headers=headers,
+                )
+                return self._handle_rest_response(response)
+            except CeligoError:
+                raise
+            except Exception as exception:
+                last_error = exception
+                self.logger.warning(
+                    f"Celigo order lookup attempt {attempt + 1} failed: {exception}"
+                )
+                if attempt >= self._max_retries:
+                    break
+                continue
+
+        self.logger.error(
+            f"Failed order lookup via {self._orders_endpoint}: {last_error}\n"
+            f"{traceback.format_exc()}"
+        )
+        raise CeligoError(
+            message=str(last_error),
+            error_code=ErrorCode.API_CONNECTION_FAILED,
+        )
+
+    def _handle_rest_response(self, response: httpx.Response) -> Any:
+        """Normalize a plain REST JSON response from the orders route.
+
+        Unlike the MCP proxy envelopes the orders route answers with plain
+        JSON (no JSON-RPC wrapping). Semantics mirror
+        :meth:`_handle_response`: HTTP >= 400 raises :class:`CeligoError`
+        and an empty body normalizes to ``[]``.
+        """
+        if response.status_code >= 400:
+            raise CeligoError(
+                message=f"Celigo API returned HTTP {response.status_code}: "
+                f"{response.text[:500]}",
+                error_code=ErrorCode.CELIGO_API_ERROR,
+                details={"status_code": response.status_code},
+            )
+
+        if not (response.content is None or len(response.content) == 0):
+            try:
+                body = response.json()
+            except Exception as exception:
+                raise CeligoError(
+                    message=f"Celigo API returned non-JSON response: {exception}",
+                    error_code=ErrorCode.JSONRPC_REQUEST_FAILED,
+                )
+        else:
+            return []
+
+        return self._normalize(body)
 
     def _with_ucp_meta(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure ``arguments.meta.ucp-agent.profile`` is present.

@@ -137,6 +137,25 @@ MCP_CONFIGURATION = {
                 "required": ["query"],
             },
         },
+        # Order Tools (1)
+        {
+            "name": "lookup_order",
+            "description": "Look up orders via the Celigo integrator.io order lookup REST API (POST https://api.integrator.io/apis/v1/api/orders). Provided fields are sent verbatim as the JSON request body — include 'order_id' or the filter fields the target lookup integration expects; with no fields the request is sent without a body. LIVE: the endpoint currently ignores body filters and returns the shop's recent orders with pagination. Uses the configured Celigo bearer token for authentication.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "order_id": {
+                        "type": "string",
+                        "description": "Order identifier to look up, e.g. 'gid://shopify/Order/123' or the internal order id expected by the lookup integration",
+                    },
+                    "filters": {
+                        "type": "object",
+                        "description": "Additional lookup/filter criteria forwarded verbatim in the request body (AND logic)",
+                    },
+                },
+                "required": [],
+            },
+        },
         # Generic Celigo Tool Invocation (escape hatch)
         {
             "name": "call_celigo_tool",
@@ -192,6 +211,15 @@ MCP_CONFIGURATION = {
             "function_name": "search_shop_policies_and_faqs",
             "return_type": "text",
         },
+        # Order Tools
+        {
+            "type": "tool",
+            "name": "lookup_order",
+            "module_name": "mcp_celigo_shopify_bridge",
+            "class_name": "MCPCeligoBridge",
+            "function_name": "lookup_order",
+            "return_type": "text",
+        },
         # Generic Celigo Tool Invocation (escape hatch)
         {
             "type": "tool",
@@ -219,7 +247,8 @@ MCP_CONFIGURATION = {
                     "endpoint": "https://api.integrator.io/apis/v1/api/ucp/mcp",
                     "legacy_endpoint": "https://api.integrator.io/apis/v1/api/mcp",
                     "legacy_tools": ["search_shop_policies_and_faqs"],
-                    "bearer_token": "placeholder",
+                    "orders_endpoint": "https://api.integrator.io/apis/v1/api/orders",
+                    "bearer_token": "89f3690302b34641999a7f40d984f76a",
                     "timeout": 60,
                     "connect_timeout": 15,
                     "max_retries": 1,

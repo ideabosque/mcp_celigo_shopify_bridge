@@ -27,17 +27,18 @@ from mcp_celigo_shopify_bridge.error_handler import (
 
 class TestToolRegistration:
     def test_configuration_has_tools(self):
-        assert len(MCP_CONFIGURATION["tools"]) == 5
+        assert len(MCP_CONFIGURATION["tools"]) == 6
 
     def test_configuration_has_module_links(self):
         links = MCP_CONFIGURATION["module_links"]
-        assert len(links) == 5
+        assert len(links) == 6
         by_name = {link["name"]: link for link in links}
         for name in (
             "search_catalog",
             "get_product",
             "lookup_catalog",
             "search_shop_policies_and_faqs",
+            "lookup_order",
             "call_celigo_tool",
         ):
             link = by_name[name]
@@ -396,6 +397,59 @@ class TestSearchShopPoliciesAndFaqs:
     def test_exception_returns_error_dict(self, processor):
         processor._execute_celigo_call.side_effect = RuntimeError("boom")
         result = processor.search_shop_policies_and_faqs(query="shipping")
+        assert "error" in result
+        assert result["error_code"] == ErrorCode.UNKNOWN_ERROR
+
+
+# ==================== lookup_order ====================
+
+
+class TestLookupOrder:
+    def test_forwards_body_verbatim(self, processor, celigo_result_factory):
+        processor._execute_order_lookup.return_value = celigo_result_factory(
+            {"orderId": "123", "total": "59.99"}
+        )
+        result = processor.lookup_order(order_id="gid://shopify/Order/123")
+        processor._execute_order_lookup.assert_called_once_with(
+            {"order_id": "gid://shopify/Order/123"}
+        )
+        assert result == {"order_id": "123", "total": "59.99"}
+
+    def test_no_arguments_sends_no_body(self, processor, celigo_result_factory):
+        processor._execute_order_lookup.return_value = celigo_result_factory(
+            [{"orderId": "123"}]
+        )
+        result = processor.lookup_order()
+        processor._execute_order_lookup.assert_called_once_with(None)
+        assert result == [{"order_id": "123"}]
+
+    def test_filters_forwarded_in_body(self, processor, celigo_result_factory):
+        processor._execute_order_lookup.return_value = celigo_result_factory(
+            {"orderList": []}
+        )
+        processor.lookup_order(filters={"status": "paid"})
+        processor._execute_order_lookup.assert_called_once_with(
+            {"filters": {"status": "paid"}}
+        )
+
+    def test_empty_result_returns_friendly_message(
+        self, processor, celigo_result_factory
+    ):
+        processor._execute_order_lookup.return_value = celigo_result_factory([])
+        result = processor.lookup_order(order_id="999")
+        assert result == "No orders found for the provided lookup criteria."
+
+    def test_propagates_client_error(self, processor):
+        processor._execute_order_lookup.return_value = build_error_response(
+            message="Celigo API returned HTTP 401: unauthorized",
+            error_code=ErrorCode.CELIGO_API_ERROR,
+        )
+        result = processor.lookup_order(order_id="1")
+        assert result["error_code"] == ErrorCode.CELIGO_API_ERROR
+
+    def test_exception_returns_error_dict(self, processor):
+        processor._execute_order_lookup.side_effect = RuntimeError("boom")
+        result = processor.lookup_order(order_id="1")
         assert "error" in result
         assert result["error_code"] == ErrorCode.UNKNOWN_ERROR
 
@@ -780,6 +834,97 @@ class TestCeligoClientRouting:
             client._legacy_endpoint == "https://api.integrator.io/apis/v1/api/mcp"
         )
         assert "search_shop_policies_and_faqs" in client._legacy_tools
+        assert (
+            client._orders_endpoint
+            == "https://api.integrator.io/apis/v1/api/orders"
+        )
+
+    def test_order_lookup_posts_to_orders_endpoint(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 0,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.content = b'{"result": {"ok": true}}'
+        response.json.return_value = {"result": {"ok": True}}
+        client._http_client.post.return_value = response
+
+        data = client.lookup_orders({"id": "1"})
+
+        client._http_client.post.assert_called_once_with(
+            "https://api.integrator.io/apis/v1/api/orders",
+            json={"id": "1"},
+            headers={
+                "Authorization": "Bearer tok",
+                "Content-Type": "application/json",
+            },
+        )
+        assert data == {"result": {"ok": True}}
+
+    def test_order_lookup_without_payload_sends_no_body(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 0,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.content = b'{"result": {"ok": true}}'
+        response.json.return_value = {"result": {"ok": True}}
+        client._http_client.post.return_value = response
+
+        client.lookup_orders()
+
+        assert client._http_client.post.call_args[1]["json"] is None
+
+    def test_order_lookup_http_error_raises(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 0,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+        response = MagicMock()
+        response.status_code = 401
+        response.content = b'{"error": "unauthorized"}'
+        client._http_client.post.return_value = response
+
+        with pytest.raises(CeligoError) as excinfo:
+            client.lookup_orders({"id": "1"})
+        assert excinfo.value.details.get("status_code") == 401
+
+    def test_order_connection_failure_raises_connection_error(self):
+        client = CeligoClient(
+            MagicMock(),
+            **{
+                "celigo_mcp": {
+                    "bearer_token": "tok",
+                    "max_retries": 0,
+                }
+            },
+        )
+        client._http_client = MagicMock()
+        client._http_client.post.side_effect = RuntimeError("boom")
+
+        with pytest.raises(CeligoError) as excinfo:
+            client.lookup_orders({"id": "1"})
+        assert excinfo.value.error_code == ErrorCode.API_CONNECTION_FAILED
 
 
 # ==================== Validation utilities ====================

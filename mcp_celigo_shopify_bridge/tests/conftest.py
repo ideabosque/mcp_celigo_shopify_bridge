@@ -49,6 +49,7 @@ def processor():
     proc.endpoint_id = "test-endpoint-id"
     proc.part_id = "test-part-id"
     proc._execute_celigo_call = MagicMock()
+    proc._execute_order_lookup = MagicMock()
     return proc
 
 

@@ -2,7 +2,7 @@
 
 `mcp_celigo_shopify_bridge` exposes Celigo integrator.io commerce operations as
 SilvaEngine MCP tools backed by the Celigo integrator.io MCP proxy. The proxy
-has two routes with different tool surfaces:
+has three routes with different tool surfaces:
 
 - **UCP route** (`https://api.integrator.io/apis/v1/api/ucp/mcp`, primary) —
   proxies the Shopify Storefront MCP's UCP-conforming catalog tools
@@ -11,13 +11,16 @@ has two routes with different tool surfaces:
   legacy Storefront MCP tools; `search_shop_policies_and_faqs` still works here
   (it is buyer-JWT-gated on the UCP route). The legacy catalog tools died with
   the August 31, 2026 Storefront MCP deprecation (HTTP 200 with empty bodies).
+- **Order lookup route** (`https://api.integrator.io/apis/v1/api/orders`,
+  REST) — plain REST `POST` used by `lookup_order`, not a JSON-RPC MCP
+  proxy; consumes the lookup criteria as its JSON request body.
 
 The package provides a processor facade and MCP configuration for a host
 runtime. It is not a standalone MCP server executable.
 
 ## Capabilities
 
-The module registers 5 tools:
+The module registers 6 tools:
 
 - `search_catalog` — product catalog search following the Shopify UCP
   convention. Pass a natural language `query` (e.g. "snowboard") with
@@ -38,6 +41,18 @@ The module registers 5 tools:
   FAQs. Send a natural language `query` such as "what is your shipping
   policy"; the tool returns the matching `{question, answer}` records.
   Routed through the legacy endpoint automatically.
+- `lookup_order` — order lookup via the Celigo integrator.io order REST API
+  (`POST https://api.integrator.io/apis/v1/api/orders`, authenticated with the
+  same Celigo bearer token). This is a plain REST route — not the JSON-RPC MCP
+  proxy — so no UCP `meta` plumbing applies. Tool arguments are forwarded
+  verbatim as the JSON request body (e.g. `order_id`, or the filter fields
+  the target lookup integration expects); with no arguments the request is
+  sent without a body. Responses are normalized to snake_case and an empty
+  response becomes a friendly no-results string. **Live-verified**: the endpoint currently ignores supplied body fields and
+  returns the shop's recent orders (last 3 at test time) with `page_info`
+  paging; forwarded fields are kept for forward compatibility with filter
+  support. Configurable via
+  `celigo_mcp.orders_endpoint`.
 - `call_celigo_tool` — escape hatch to invoke any other Celigo
   integrator.io MCP tool by name (e.g. cart, checkout, and order operations
   such as `create_cart`, `get_cart`, `create_checkout`, `get_order` — these
@@ -68,6 +83,7 @@ host owns buyer authentication.
       -> CeligoClient
       -> UCP route    https://api.integrator.io/apis/v1/api/ucp/mcp   (catalog tools)
       -> legacy route https://api.integrator.io/apis/v1/api/mcp       (legacy_tools)
+      -> orders route  https://api.integrator.io/apis/v1/api/orders  (lookup_order, REST)
 
 The client owns endpoint routing (tools listed in
 `celigo_mcp.legacy_tools` go to the legacy endpoint, everything else to the
@@ -108,6 +124,7 @@ settings = {
         "endpoint": "https://api.integrator.io/apis/v1/api/ucp/mcp",
         "legacy_endpoint": "https://api.integrator.io/apis/v1/api/mcp",
         "legacy_tools": ["search_shop_policies_and_faqs"],
+        "orders_endpoint": "https://api.integrator.io/apis/v1/api/orders",
         "bearer_token": "replace-me",
     }
 }
@@ -118,7 +135,8 @@ processor.part_id = "partition-id"
 ```
 
 Optional settings: `ucp_agent_profile` (override the injected UCP agent
-profile URL), `timeout`, `connect_timeout`, `max_retries`.
+profile URL), `orders_endpoint` (override the order lookup REST URL),
+`timeout`, `connect_timeout`, `max_retries`.
 
 Set `bearer_token` to a Celigo integrator.io API token. Requests send
 `Authorization: Bearer ***` and `Content-Type: application/json` headers.
